@@ -1,5 +1,5 @@
 obj-m += unicom.o
-KDIR = /usr/src/linux-headers-4.4.0-87-generic
+KDIR = /usr/src/linux
 all:
 	$(MAKE) -C $(KDIR) SUBDIRS=$(PWD) modules
 
