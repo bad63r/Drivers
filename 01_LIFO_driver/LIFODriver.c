@@ -46,7 +46,7 @@ ssize_t driverRead (struct file *filePtr, char __user *buffer, size_t length, lo
 			return -EFAULT;
 		}
 
-		printk("Successfully read from the LIFO %d. \n", pos);
+		printk("Successfully read from the LIFO. pos = %d. \n", pos);
 		endRead = 1;
 	}
 	else
