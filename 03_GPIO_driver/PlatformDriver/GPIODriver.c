@@ -6,6 +6,10 @@
 #include <linux/cdev.h> /* all functions related to cdev a.k.a. character device */
 #include <linux/fs.h> /* struct file operations */
 #include <linux/platform_device.h> /* struct platform_driver */
+#include <linux/errno.h> /* errors */
+#include <linux/io.h> /* iowrite ioread */
+#include <linux/slab.h> /* kmalloc kfree */
+#include <linux/ioport.h> /* ioremap */
 
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("simple file operations driver.");
@@ -15,30 +19,151 @@ dev_t devID;
 static struct class *classPtr;
 static struct device* devicePtr;
 static struct cdev* cdevPtr;
+static struct gpio_info *gp = NULL;
 
 #define DRIVER_NAME "ledGPIO"
+#define BUFF_SIZE 20
+int endRead = 0;
 
-static stru
+struct gpio_info {
+  unsigned long mem_start;
+  unsigned long mem_end;
+  void __iomem *base_addr;
+};
 
-static struct platform_driver = {
+static int gpioProbe(struct platform_device *pdev)
+{
+  struct resource *r_mem;
+  int rc = 0;
+  r_mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+  if (!r_mem) {
+    printk(KERN_ALERT "Failed to get resource\n");
+    return -ENODEV;
+  }
+  gp = (struct gpio_info *) kmalloc(sizeof(struct gpio_info), GFP_KERNEL);
+  if (!gp) {
+    printk(KERN_ALERT "Could not allocate led device\n");
+    return -ENOMEM;
+  }
+
+  gp->mem_start = r_mem->start;
+  gp->mem_end = r_mem->end;
+  //printk(KERN_INFO "Start address:%x \t end address:%x", r_mem->start, r_mem->end);
+
+  if (!request_mem_region(gp->mem_start,gp->mem_end - gp->mem_start + 1,	DRIVER_NAME))
+  {
+    printk(KERN_ALERT "Could not lock memory region at %p\n",(void *)gp->mem_start);
+    rc = -EBUSY;
+    goto error1;
+  }
+
+  gp->base_addr = ioremap(gp->mem_start, gp->mem_end - gp->mem_start + 1);
+  if (!gp->base_addr) {
+    printk(KERN_ALERT "Could not allocate memory\n");
+    rc = -EIO;
+    goto error2;
+  }
+
+  printk(KERN_WARNING "led gpio platform driver registered\n");
+  return 0;//ALL OK
+
+error2:
+  release_mem_region(gp->mem_start, gp->mem_end - gp->mem_start + 1);
+error1:
+  return rc;
+}
+
+static int gpioRemove(struct platform_device *pdev)
+{
+  printk(KERN_WARNING "led gpio platform driver removed\n");
+  iowrite32(0, gp->base_addr);
+  iounmap(gp->base_addr);
+  release_mem_region(gp->mem_start, gp->mem_end - gp->mem_start + 1);
+  kfree(gp);
+  return 0;
+}
+
+
+static struct of_device_id gpio_of_match[] = {
+  { .compatible = "led_gpio", },
+  { /* end of list */ },
+};
+
+static struct platform_driver GPIODriverPlatform = {
 	.driver = {
-		.name = DRIVER_NAME,
+		.name = ledGPIO,
 		.owner = THIS_MODULE,
-		.of_match_table = led_of_match,
+		.of_match_table = gpio_of_match,
 	},	
 	.probe = gpioProbe,
 	.remove = gpioRemove,
 }
 
+MODULE_DEVICE_TABLE(of, gpio_of_match);
 
 ssize_t GPIODriverRead (struct file *filePtr, char __user *buffer, size_t length, loff_t *offset)
 {
-	printk("Read function of the driver was called. \n");
-	return 0;
+	int ret;
+	int len = 0;
+	u32 gpio_val = 0;
+	int i = 0;
+	char buff[BUFF_SIZE];
+	if (endRead){
+		endRead = 0;
+		return 0;
+	}
+
+	gpio_val = ioread32(gp->base_addr);
+
+	//buffer: 0b????
+	//index:  012345
+
+	buff[0]= '0';
+	buff[1]= 'b';
+	for(i=0;i<4;i++)
+	{
+		if((gpio_val >> i) & 0x01)
+			buff[5-i] = '1';
+		else
+			buff[5-i] = '0';
+	}
+	buff[6]= '\n';
+	len=7;
+	ret = copy_to_user(buffer, buff, len);
+	if(ret)
+		return -EFAULT;
+	printk(KERN_INFO "Succesfully read\n");
+	endRead = 1;
+
+	return len;
 }
 ssize_t GPIODriverWrite (struct file *filePtr, const char __user *buffer, size_t length, loff_t *offset)
 {
-	printk("Write function of the driver was called. \n");
+	char buff[BUFF_SIZE];
+	int ret = 0;
+	long int gpio_val=0;
+
+	ret = copy_from_user(buff, buffer, length);
+	if(ret)
+		return -EFAULT;
+	buff[length] = '\0';
+
+	// HEX  INPUT
+	if(buff[0] == '0' && (buff[1] == 'x' || buff[1] == 'X')) 
+	{
+		ret = kstrtol(buff+2,16,&gpio_val);
+	}
+	
+	if (!ret)
+	{
+		iowrite32((u32)gpio_val, gp->base_addr);
+		printk(KERN_INFO "Succesfully wrote value %#x",(u32)gpio_val); 
+	}
+	else
+	{
+		printk(KERN_INFO "Wrong command format\n"); 
+	}
+
 	return length;
 }
 
@@ -64,7 +189,7 @@ static struct file_operations myFileOperations = {
 	.open = GPIODriverOpen,
 	.release = GPIODriverClose,
 	.read = GPIODriverRead,
-	.write = GPIODriverWrite
+	.write = GPIODriverWrite,
 };
 
 /* 
@@ -115,7 +240,7 @@ static int __init driverInit(void)
 	}
 	printk(KERN_INFO "Successfully added GPIO driver to the system. \n");
 
-	return 0;
+	return platform_driver_register(&GPIODriverPlatform);
 
 fail_2:
 	device_destroy(classPtr, devID);
@@ -131,6 +256,7 @@ fail_0:
 */
 static void __exit driverExit(void)
 {
+    platform_driver_unregister(&GPIODriverPlatform);
 	cdev_del(cdevPtr);
 	device_destroy(classPtr, devID);
 	class_destroy(classPtr);
