@@ -4,6 +4,9 @@
         "init.h": "c",
         "stringify.h": "c",
         "kdev_t.h": "c",
-        "cdev.h": "c"
+        "cdev.h": "c",
+        "of_address.h": "c",
+        "platform_device.h": "c",
+        "device.h": "c"
     }
 }
