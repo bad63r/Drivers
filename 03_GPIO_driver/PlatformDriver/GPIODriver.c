@@ -1,37 +1,77 @@
-#include <linux/module.h> /* #include dynamic_debug inserts printk() implicitly;
-							 module_init(), module_exit()*/
-#include <linux/init.h> /* __init, __exit */
-#include <linux/kdev_t.h> /* MKDEV, implicitly dev_t type*/
-#include <linux/device.h> /* device_create(), device_destroy() */
-#include <linux/cdev.h> /* all functions related to cdev a.k.a. character device */
-#include <linux/fs.h> /* struct file operations */
-#include <linux/platform_device.h> /* struct platform_driver */
-#include <linux/errno.h> /* errors */
-#include <linux/io.h> /* iowrite ioread */
-#include <linux/slab.h> /* kmalloc kfree */
-#include <linux/ioport.h> /* ioremap */
+#include <linux/kernel.h>
+#include <linux/string.h>
+#include <linux/module.h>
+#include <linux/init.h>
+#include <linux/fs.h>
+#include <linux/types.h>
+#include <linux/cdev.h>
+#include <linux/kdev_t.h>
+#include <linux/uaccess.h>
+#include <linux/errno.h>
+#include <linux/device.h>
 
-MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("simple file operations driver.");
-MODULE_AUTHOR("bad63r");
-
-dev_t devID;
-static struct class *classPtr;
-static struct device* devicePtr;
-static struct cdev* cdevPtr;
-static struct gpio_info *gp = NULL;
-
-#define DRIVER_NAME "ledGPIO"
+#include <linux/io.h> //iowrite ioread
+#include <linux/slab.h>//kmalloc kfree
+#include <linux/platform_device.h>//platform driver
+#include <linux/ioport.h>//ioremap
+#include <linux/of_address.h>
 #define BUFF_SIZE 20
-int endRead = 0;
+#define BUFF_SIZE 20
+#define DRIVER_NAME "led"
+MODULE_LICENSE("Dual BSD/GPL");
 
-struct gpio_info {
+struct led_info {
   unsigned long mem_start;
   unsigned long mem_end;
   void __iomem *base_addr;
 };
 
-static int gpioProbe(struct platform_device *pdev)
+dev_t my_dev_id;
+static struct class *my_class;
+static struct device *my_device;
+static struct cdev *my_cdev;
+static struct led_info *lp = NULL;
+
+int endRead = 0;
+
+
+static int led_probe(struct platform_device *pdev);
+static int led_remove(struct platform_device *pdev);
+int led_open(struct inode *pinode, struct file *pfile);
+int led_close(struct inode *pinode, struct file *pfile);
+ssize_t led_read(struct file *pfile, char __user *buffer, size_t length, loff_t *offset);
+ssize_t led_write(struct file *pfile, const char __user *buffer, size_t length, loff_t *offset);
+static int __init led_init(void);
+static void __exit led_exit(void);
+
+struct file_operations my_fops =
+{
+	.owner = THIS_MODULE,
+	.open = led_open,
+	.read = led_read,
+	.write = led_write,
+	.release = led_close,
+};
+
+static struct of_device_id led_of_match[] = {
+  { .compatible = "led_gpio", },
+  { /* end of list */ },
+};
+
+static struct platform_driver led_driver = {
+  .driver = {
+    .name = DRIVER_NAME,
+    .owner = THIS_MODULE,
+    .of_match_table	= led_of_match,
+  },
+  .probe		= led_probe,
+  .remove		= led_remove,
+};
+
+
+MODULE_DEVICE_TABLE(of, led_of_match);
+
+static int led_probe(struct platform_device *pdev)
 {
   struct resource *r_mem;
   int rc = 0;
@@ -40,72 +80,68 @@ static int gpioProbe(struct platform_device *pdev)
     printk(KERN_ALERT "Failed to get resource\n");
     return -ENODEV;
   }
-  gp = (struct gpio_info *) kmalloc(sizeof(struct gpio_info), GFP_KERNEL);
-  if (!gp) {
+  lp = (struct led_info *) kmalloc(sizeof(struct led_info), GFP_KERNEL);
+  if (!lp) {
     printk(KERN_ALERT "Could not allocate led device\n");
     return -ENOMEM;
   }
 
-  gp->mem_start = r_mem->start;
-  gp->mem_end = r_mem->end;
+  lp->mem_start = r_mem->start;
+  lp->mem_end = r_mem->end;
   //printk(KERN_INFO "Start address:%x \t end address:%x", r_mem->start, r_mem->end);
 
-  if (!request_mem_region(gp->mem_start,gp->mem_end - gp->mem_start + 1,	DRIVER_NAME))
+  if (!request_mem_region(lp->mem_start,lp->mem_end - lp->mem_start + 1,	DRIVER_NAME))
   {
-    printk(KERN_ALERT "Could not lock memory region at %p\n",(void *)gp->mem_start);
+    printk(KERN_ALERT "Could not lock memory region at %p\n",(void *)lp->mem_start);
     rc = -EBUSY;
     goto error1;
   }
 
-  gp->base_addr = ioremap(gp->mem_start, gp->mem_end - gp->mem_start + 1);
-  if (!gp->base_addr) {
+  lp->base_addr = ioremap(lp->mem_start, lp->mem_end - lp->mem_start + 1);
+  if (!lp->base_addr) {
     printk(KERN_ALERT "Could not allocate memory\n");
     rc = -EIO;
     goto error2;
   }
 
-  printk(KERN_WARNING "led gpio platform driver registered\n");
+  printk(KERN_WARNING "led platform driver registered\n");
   return 0;//ALL OK
 
 error2:
-  release_mem_region(gp->mem_start, gp->mem_end - gp->mem_start + 1);
+  release_mem_region(lp->mem_start, lp->mem_end - lp->mem_start + 1);
 error1:
   return rc;
 }
 
-static int gpioRemove(struct platform_device *pdev)
+static int led_remove(struct platform_device *pdev)
 {
-  printk(KERN_WARNING "led gpio platform driver removed\n");
-  iowrite32(0, gp->base_addr);
-  iounmap(gp->base_addr);
-  release_mem_region(gp->mem_start, gp->mem_end - gp->mem_start + 1);
-  kfree(gp);
+  printk(KERN_WARNING "led platform driver removed\n");
+  iowrite32(0, lp->base_addr);
+  iounmap(lp->base_addr);
+  release_mem_region(lp->mem_start, lp->mem_end - lp->mem_start + 1);
+  kfree(lp);
   return 0;
 }
 
 
-static struct of_device_id gpio_of_match[] = {
-  { .compatible = "led_gpio", },
-  { /* end of list */ },
-};
 
-static struct platform_driver GPIODriverPlatform = {
-	.driver = {
-		.name = ledGPIO,
-		.owner = THIS_MODULE,
-		.of_match_table = gpio_of_match,
-	},	
-	.probe = gpioProbe,
-	.remove = gpioRemove,
+int led_open(struct inode *pinode, struct file *pfile) 
+{
+		//printk(KERN_INFO "Succesfully opened led\n");
+		return 0;
 }
 
-MODULE_DEVICE_TABLE(of, gpio_of_match);
+int led_close(struct inode *pinode, struct file *pfile) 
+{
+		//printk(KERN_INFO "Succesfully closed led\n");
+		return 0;
+}
 
-ssize_t GPIODriverRead (struct file *filePtr, char __user *buffer, size_t length, loff_t *offset)
+ssize_t led_read(struct file *pfile, char __user *buffer, size_t length, loff_t *offset) 
 {
 	int ret;
 	int len = 0;
-	u32 gpio_val = 0;
+	u32 led_val = 0;
 	int i = 0;
 	char buff[BUFF_SIZE];
 	if (endRead){
@@ -113,7 +149,7 @@ ssize_t GPIODriverRead (struct file *filePtr, char __user *buffer, size_t length
 		return 0;
 	}
 
-	gpio_val = ioread32(gp->base_addr);
+	led_val = ioread32(lp->base_addr);
 
 	//buffer: 0b????
 	//index:  012345
@@ -122,7 +158,7 @@ ssize_t GPIODriverRead (struct file *filePtr, char __user *buffer, size_t length
 	buff[1]= 'b';
 	for(i=0;i<4;i++)
 	{
-		if((gpio_val >> i) & 0x01)
+		if((led_val >> i) & 0x01)
 			buff[5-i] = '1';
 		else
 			buff[5-i] = '0';
@@ -132,16 +168,17 @@ ssize_t GPIODriverRead (struct file *filePtr, char __user *buffer, size_t length
 	ret = copy_to_user(buffer, buff, len);
 	if(ret)
 		return -EFAULT;
-	printk(KERN_INFO "Succesfully read\n");
+	//printk(KERN_INFO "Succesfully read\n");
 	endRead = 1;
 
 	return len;
 }
-ssize_t GPIODriverWrite (struct file *filePtr, const char __user *buffer, size_t length, loff_t *offset)
+
+ssize_t led_write(struct file *pfile, const char __user *buffer, size_t length, loff_t *offset) 
 {
 	char buff[BUFF_SIZE];
 	int ret = 0;
-	long int gpio_val=0;
+	long int led_val=0;
 
 	ret = copy_from_user(buff, buffer, length);
 	if(ret)
@@ -151,13 +188,24 @@ ssize_t GPIODriverWrite (struct file *filePtr, const char __user *buffer, size_t
 	// HEX  INPUT
 	if(buff[0] == '0' && (buff[1] == 'x' || buff[1] == 'X')) 
 	{
-		ret = kstrtol(buff+2,16,&gpio_val);
+		ret = kstrtol(buff+2,16,&led_val);
 	}
+	// BINARY INPUT
+	else if(buff[0] == '0'  && (buff[1] == 'b' || buff[1] == 'B')) 
+	{
+		ret = kstrtol(buff+2,2,&led_val);
+	}
+	// DECIMAL INPUT
+	else 
+	{
+		ret = kstrtol(buff,10,&led_val);
+	}
+
 	
 	if (!ret)
 	{
-		iowrite32((u32)gpio_val, gp->base_addr);
-		printk(KERN_INFO "Succesfully wrote value %#x",(u32)gpio_val); 
+		iowrite32((u32)led_val, lp->base_addr);
+		//printk(KERN_INFO "Succesfully wrote value %#x",(u32)led_val); 
 	}
 	else
 	{
@@ -167,103 +215,66 @@ ssize_t GPIODriverWrite (struct file *filePtr, const char __user *buffer, size_t
 	return length;
 }
 
-/*
-** @brief This function is used when file for this driver is opened.
-*/
-int GPIODriverOpen(struct inode *, struct file *)
+static int __init led_init(void)
 {
-	printk("Driver file was opened. \n");
-	return 0;
-}
+   int ret = 0;
 
-/*
-** @brief This function is used when file for this driver is closed.
-*/
-int GPIODriverClose(struct inode *, struct file *)
-{
-	printk("Driver file was closed. \n");
-	return 0;
-}
+	//Initialize array
 
-static struct file_operations myFileOperations = {
-	.open = GPIODriverOpen,
-	.release = GPIODriverClose,
-	.read = GPIODriverRead,
-	.write = GPIODriverWrite,
-};
+   ret = alloc_chrdev_region(&my_dev_id, 0, 1, DRIVER_NAME);
+   if (ret){
+      printk(KERN_ERR "failed to register char device\n");
+      return ret;
+   }
+   printk(KERN_INFO "char device region allocated\n");
 
-/* 
-** @brief This function is executed when module is inserted into kernel.
-*/
-static int __init driverInit(void)
-{
-	int ret = 0;
+   my_class = class_create("led_class");
+   if (my_class == NULL){
+      printk(KERN_ERR "failed to create class\n");
+      goto fail_0;
+   }
+   printk(KERN_INFO "class created\n");
+   
+   my_device = device_create(my_class, NULL, my_dev_id, NULL, DRIVER_NAME);
+   if (my_device == NULL){
+      printk(KERN_ERR "failed to create device\n");
+      goto fail_1;
+   }
+   printk(KERN_INFO "device created\n");
 
-	/* Register device */
-	ret = alloc_chrdev_region(&devID, 0, 1, "GPIODriver");
+	my_cdev = cdev_alloc();	
+	my_cdev->ops = &my_fops;
+	my_cdev->owner = THIS_MODULE;
+	ret = cdev_add(my_cdev, my_dev_id, 1);
 	if (ret)
 	{
-		printk(KERN_WARNING "Can't register device driver. \n");
-		return -1;
-	}
-	printk(KERN_INFO "Successfully allocated major number. \n");
-
-	/* create class*/
-	classPtr = class_create("GPIODriverClass");
-	if (classPtr == NULL)
-	{
-		printk(KERN_WARNING "Can't create class. \n");
-		goto fail_0;
-	}
-	printk(KERN_INFO "Successfully created the class. \n");
-
-	/* create device */
-	devicePtr = device_create(classPtr, NULL, devID, NULL, "GPIODriver");
-	if (devicePtr == NULL)
-	{
-		printk(KERN_WARNING "Can't create struct device. \n");
-		goto fail_1;
-	}
-	printk(KERN_INFO "Successfully created struct device. \n");
-	
-	/* allocate space for cdev structure */
-	cdevPtr = cdev_alloc();
-	/* initializing structure cdev */
-	cdevPtr-> owner = THIS_MODULE;
-	cdevPtr-> ops = &myFileOperations;
-	/* add character device to the system */
-	ret = cdev_add(cdevPtr, devID, 1);
-	if (ret)
-	{
-		printk(KERN_WARNING "Can't add character device to the system. \n");
+      printk(KERN_ERR "failed to add cdev\n");
 		goto fail_2;
 	}
-	printk(KERN_INFO "Successfully added GPIO driver to the system. \n");
+   printk(KERN_INFO "cdev added\n");
+   printk(KERN_INFO "Hello world\n");
 
-	return platform_driver_register(&GPIODriverPlatform);
+  return platform_driver_register(&led_driver);
 
-fail_2:
-	device_destroy(classPtr, devID);
-fail_1:
-	class_destroy(classPtr);
-fail_0:
-	unregister_chrdev_region(devID, 1);
-	return -1;
+   fail_2:
+      device_destroy(my_class, my_dev_id);
+   fail_1:
+      class_destroy(my_class);
+   fail_0:
+      unregister_chrdev_region(my_dev_id, 1);
+   return -1;
 }
 
-/* 
-** @brief This function is executed when module is removed from the kernel.
-*/
-static void __exit driverExit(void)
+static void __exit led_exit(void)
 {
-    platform_driver_unregister(&GPIODriverPlatform);
-	cdev_del(cdevPtr);
-	device_destroy(classPtr, devID);
-	class_destroy(classPtr);
-	unregister_chrdev_region(devID, 1);
-	printk(KERN_INFO "GPIO driver removed successfully without errors! \n");
+   platform_driver_unregister(&led_driver);
+   cdev_del(my_cdev);
+   device_destroy(my_class, my_dev_id);
+   class_destroy(my_class);
+   unregister_chrdev_region(my_dev_id,1);
+   printk(KERN_INFO "Goodbye, cruel world\n");
 }
 
 
-module_init(driverInit);
-module_exit(driverExit);
+module_init(led_init);
+module_exit(led_exit);
