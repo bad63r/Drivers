@@ -24,6 +24,13 @@ static dev_t devID;
 static struct class* classPtr;
 static struct device* devicePtr;
 static struct cdev* cdevPtr;
+
+/*TODO */
+ssize_t driverRead (struct file *filePtr, char __user *buffer, size_t length, loff_t *offset);
+ssize_t driverWrite (struct file *filePtr, const char __user *buffer, size_t length, loff_t *offset);
+
+int driverOpen (struct inode *, struct file *);
+int driverClose (struct inode *, struct file *);
  
 /*
 ** @brief This function writes the data into the I2C client
@@ -228,9 +235,40 @@ static struct i2c_driver ssd1306_driver = {
 /*
 ** I2C Board Info strucutre
 */
-static struct i2c_board_info ssd1306_i2c_board_info = {
-        I2C_BOARD_INFO(SLAVE_DEVICE_NAME, SSD1306_SLAVE_ADDR)
-    };
+static struct i2c_board_info ssd1306_i2c_board_info = 
+{
+    I2C_BOARD_INFO(SLAVE_DEVICE_NAME, SSD1306_SLAVE_ADDR)
+};
+
+
+/*
+** @brief This function is used when file for this driver is opened.
+*/
+int driverOpen (struct inode *, struct file *)
+{
+    printk(KERN_INFO "SSD1306Driver file was opened. \n");
+    return 0;
+}
+
+/*
+** @brief This function is used when file for this driver is closed.
+*/
+int driverClose (struct inode *, struct file *)
+{
+    printk(KERN_INFO "SSD1306Driver file was closed. \n");
+    return 0;
+}
+
+/* file operations structure */
+static struct file_operations myFileOperations = 
+{
+    .open = driverOpen,
+    .release = driverClose,
+    /* TODO */
+    // .read = driverRead,
+    // .write = driverWrite,
+};
+
  
 /*
 ** Module Init function
@@ -244,7 +282,7 @@ static int __init driverInit(void)
     if (ret)
     {
         printk(KERN_ALERT "Can't allocate major number for SSD1306Driver \n");
-        return -1
+        return -1;
     }
     printk(KERN_INFO "Successfully allocated majon number for SSD1306Driver \n");
 
@@ -258,7 +296,7 @@ static int __init driverInit(void)
     printk(KERN_INFO "Successfully created class for SSD1306Driver \n");
 
     /* create device */
-    devicePtr = device_create(classPtr, NULL, devID, NULL, SSD1306Driver);
+    devicePtr = device_create(classPtr, NULL, devID, NULL, "SSD1306Driver");
     if (devicePtr == NULL)
     {
         printk(KERN_ALERT "Can't create device of SSD1306Driver. \n");
@@ -269,10 +307,16 @@ static int __init driverInit(void)
     /* cdev allocation */
     cdevPtr = cdev_alloc();
     /* initialize cdev structure*/
-    cdevPtr.
-
-
-
+    cdevPtr->owner = THIS_MODULE;
+    cdevPtr->ops = &myFileOperations;
+	/* add character device to the system */
+	ret = cdev_add(cdevPtr, devID, 1);
+	if (ret)
+	{
+		printk(KERN_WARNING "Can't add character device to the system. \n");
+		goto fail_2;
+	}
+	printk(KERN_INFO "Successfully added character device to the system. \n");
 
     /* get i2c adapter */
     ssd1306_i2c_adapter     = i2c_get_adapter(I2C_BUS_AVAILABLE);
@@ -291,8 +335,17 @@ static int __init driverInit(void)
         i2c_put_adapter(ssd1306_i2c_adapter);
     }
     
-    pr_info("Driver Added! \n");
+    printk(KERN_INFO "SSD1306Driver Added! \n");
     return ret;
+
+
+    fail_2:
+        device_destroy(classPtr, devID);
+    fail_1:
+        class_destroy(classPtr);
+    fail_0:
+        unregister_chrdev_region(devID, 1);
+        return -1;
 }
  
 /*
@@ -302,7 +355,11 @@ static void __exit driverExit(void)
 {
     i2c_unregister_device(ssd1306_i2c_client);
     i2c_del_driver(&ssd1306_driver);
-    pr_info("Driver Removed!!!\n");
+    cdev_del(cdevPtr);
+    device_destroy(classPtr, devID);
+    class_destroy(classPtr);
+    unregister_chrdev_region(devID, 1);
+    printk(KERN_INFO "SSD1306Driver successfully removed! \n");
 }
  
 module_init(driverInit);
