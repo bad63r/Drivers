@@ -19,6 +19,11 @@
  
 static struct i2c_adapter *ssd1306_i2c_adapter = NULL;  // I2C Adapter Structure
 static struct i2c_client  *ssd1306_i2c_client  = NULL;  // I2C Cient Structure (In our case it is SSD1306 Display)
+
+static dev_t devID;
+static struct class* classPtr;
+static struct device* devicePtr;
+static struct cdev* cdevPtr;
  
 /*
 ** @brief This function writes the data into the I2C client
@@ -174,8 +179,7 @@ static void SSD1306_Fill(unsigned char data)
 ** @brief This function getting called when the slave has been found
 ** Note : This will be called only once when we load the driver.
 */
-static int ssd1306_probe(struct i2c_client *client,
-                         const struct i2c_device_id *id)
+static int ssd1306_probe(struct i2c_client *client)
 {
     SSD1306_DisplayInit();
     
@@ -191,13 +195,12 @@ static int ssd1306_probe(struct i2c_client *client,
 ** @brief This function getting called when the slave has been removed
 ** Note : This will be called only once when we unload the driver.
 */
-static int ssd1306_remove(struct i2c_client *client)
+static void ssd1306_remove(struct i2c_client *client)
 {   
     //fill the Display with this data
     SSD1306_Fill(0x00);
     
     pr_info("SSD1306 Display Removed! \n");
-    return 0;
 }
  
 /*
@@ -234,20 +237,58 @@ static struct i2c_board_info ssd1306_i2c_board_info = {
 */
 static int __init driverInit(void)
 {
-    int ret = -1;
-    i2c_adapter     = i2c_get_adapter(I2C_BUS_AVAILABLE);
-    
-    if( i2c_adapter != NULL )
+    int ret = 0;
+
+    /* allocated major number */
+    ret = alloc_chrdev_region(&devID, 0, 1, SLAVE_DEVICE_NAME);
+    if (ret)
     {
-        i2c_client = i2c_new_device(i2c_adapter, &ssd1306_i2c_board_info);
+        printk(KERN_ALERT "Can't allocate major number for SSD1306Driver \n");
+        return -1
+    }
+    printk(KERN_INFO "Successfully allocated majon number for SSD1306Driver \n");
+
+    /* create class of the device */
+    classPtr = class_create("SSD1306DriverClass");
+    if (classPtr == NULL)
+    {
+        printk(KERN_ALERT "Can't create class of SSD1306Driver. \n");
+        goto fail_0;
+    }
+    printk(KERN_INFO "Successfully created class for SSD1306Driver \n");
+
+    /* create device */
+    devicePtr = device_create(classPtr, NULL, devID, NULL, SSD1306Driver);
+    if (devicePtr == NULL)
+    {
+        printk(KERN_ALERT "Can't create device of SSD1306Driver. \n");
+        goto fail_1;
+    }
+    printk(KERN_INFO "Successfully created device for SSD1306Driver \n");
+
+    /* cdev allocation */
+    cdevPtr = cdev_alloc();
+    /* initialize cdev structure*/
+    cdevPtr.
+
+
+
+
+    /* get i2c adapter */
+    ssd1306_i2c_adapter     = i2c_get_adapter(I2C_BUS_AVAILABLE);
+    
+    if( ssd1306_i2c_adapter != NULL )
+    {
+        /* if adapter is available, create new i2c client device*/
+        ssd1306_i2c_client = i2c_new_client_device(ssd1306_i2c_adapter, &ssd1306_i2c_board_info);
         
-        if( i2c_client != NULL )
+        if( ssd1306_i2c_client != NULL )
         {
             i2c_add_driver(&ssd1306_driver);
             ret = 0;
         }
         
-        i2c_put_adapter(i2c_adapter);
+        i2c_put_adapter(ssd1306_i2c_adapter);
     }
     
     pr_info("Driver Added! \n");
@@ -259,7 +300,7 @@ static int __init driverInit(void)
 */
 static void __exit driverExit(void)
 {
-    i2c_unregister_device(i2c_client);
+    i2c_unregister_device(ssd1306_i2c_client);
     i2c_del_driver(&ssd1306_driver);
     pr_info("Driver Removed!!!\n");
 }
