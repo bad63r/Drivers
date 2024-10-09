@@ -1,4 +1,4 @@
-# SSD1306DisplayDriver
+# SSD1306DisplayDriver / SSD1316DisplayDriver
 
 After module is loaded with `sudo insmod SSD1306Driver.ko` you can check driver messages with `sudo dmesg -c`
 Remove driver with `sudo rmmod SSD1306Driver` 
