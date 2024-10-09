@@ -16,6 +16,7 @@
 #define I2C_BUS_AVAILABLE   (          1 )              // I2C Bus available in our Raspberry Pi
 #define SLAVE_DEVICE_NAME   ( "SSD1306_DISPLAY" )       // Device and Driver Name
 #define SSD1306_SLAVE_ADDR  (       0x3C )              // SSD1306 Display Slave Address
+#define BUF_SIZE 64
  
 static struct i2c_adapter *ssd1306_i2c_adapter = NULL;  // I2C Adapter Structure
 static struct i2c_client  *ssd1306_i2c_client  = NULL;  // I2C Cient Structure (In our case it is SSD1306 Display)
@@ -25,12 +26,55 @@ static struct class* classPtr;
 static struct device* devicePtr;
 static struct cdev* cdevPtr;
 
-/*TODO */
-ssize_t driverRead (struct file *filePtr, char __user *buffer, size_t length, loff_t *offset);
-ssize_t driverWrite (struct file *filePtr, const char __user *buffer, size_t length, loff_t *offset);
+static int I2C_Write(unsigned char *buf, unsigned int len);
+static int I2C_Read(unsigned char *out_buf, unsigned int len);
+static void SSD1306_Write(bool is_cmd, unsigned char data);
+static int SSD1306_DisplayInit(void);
+static void SSD1306_Fill(unsigned char data);
+static int ssd1306_probe(struct i2c_client *client);
+static void ssd1306_remove(struct i2c_client *client);
 
 int driverOpen (struct inode *, struct file *);
 int driverClose (struct inode *, struct file *);
+ssize_t driverWrite (struct file *filePtr, const char __user *buffer, size_t length, loff_t *offset);
+static int __init driverInit(void);
+static void __exit driverExit(void);
+
+ssize_t driverWrite (struct file *filePtr, const char __user *buffer, size_t length, loff_t *offset)
+{
+    char buff[BUF_SIZE];
+    int ret = 0;
+    int len;
+    int mode = 0; // 1 - command, 0 - data
+    int data;
+
+    ret = copy_from_user(buff, buffer, length);
+    if (ret)
+    {
+        return -EFAULT;
+    }
+
+    len = sscanf(buff, "%d %d", &mode, &data);
+    if (len ==2)
+    {
+        if (mode == 1)
+        {
+            SSD1306_Write(true, data);
+        }
+        else
+        {
+            SSD1306_Write(false, data); 
+        }
+    }
+    else
+    {
+        printk(KERN_WARNING "Wrong number of arguments. Can't execute driver's write function. \n" );
+    }
+
+    printk(KERN_INFO "Successfully written to SSD1306Display. \n");
+
+    return length;
+}
  
 /*
 ** @brief This function writes the data into the I2C client
@@ -266,7 +310,7 @@ static struct file_operations myFileOperations =
     .release = driverClose,
     /* TODO */
     // .read = driverRead,
-    // .write = driverWrite,
+    .write = driverWrite,
 };
 
  
