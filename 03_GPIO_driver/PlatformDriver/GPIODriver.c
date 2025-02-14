@@ -1,24 +1,30 @@
 #include <linux/kernel.h>
 #include <linux/string.h>
-#include <linux/module.h>
-#include <linux/init.h>
+#include <linux/module.h>          /* printk(), module_init(), module_exit() */
+#include <linux/init.h>            /* __init __exit */
 #include <linux/fs.h>
 #include <linux/types.h>
 #include <linux/cdev.h>
-#include <linux/kdev_t.h>
+#include <linux/kdev_t.h>          /* dev_t */
 #include <linux/uaccess.h>
-#include <linux/errno.h>
+#include <linux/errno.h>           /* error macros */
 #include <linux/device.h>
 
-#include <linux/io.h> //iowrite ioread
-#include <linux/slab.h>//kmalloc kfree
-#include <linux/platform_device.h>//platform driver
-#include <linux/ioport.h>//ioremap
+#include <linux/io.h>              /* iowrite ioread */
+#include <linux/slab.h>            /* kmalloc() kfree() */
+#include <linux/platform_device.h> /* struct platform driver */
+#include <linux/ioport.h>          /* ioremap(), request_mem_region() */
 #include <linux/of_address.h>
+
+
+MODULE_LICENSE("Dual BSD/GPL");
+MODULE_DESCRIPTION("Platform GPIO Driver");
+MODULE_AUTHOR("bad63r");
+
+
 #define BUFF_SIZE 20
 #define BUFF_SIZE 20
 #define DRIVER_NAME "led"
-MODULE_LICENSE("Dual BSD/GPL");
 
 struct led_info {
   unsigned long mem_start;
@@ -27,9 +33,9 @@ struct led_info {
 };
 
 dev_t my_dev_id;
-static struct class *my_class;
-static struct device *my_device;
-static struct cdev *my_cdev;
+static struct class    *my_class;
+static struct device   *my_device;
+static struct cdev     *my_cdev;
 static struct led_info *lp = NULL;
 
 int endRead = 0;
@@ -37,11 +43,12 @@ int endRead = 0;
 
 static int led_probe(struct platform_device *pdev);
 static int led_remove(struct platform_device *pdev);
-int led_open(struct inode *pinode, struct file *pfile);
-int led_close(struct inode *pinode, struct file *pfile);
-ssize_t led_read(struct file *pfile, char __user *buffer, size_t length, loff_t *offset);
-ssize_t led_write(struct file *pfile, const char __user *buffer, size_t length, loff_t *offset);
-static int __init led_init(void);
+int        led_open(struct inode *pinode, struct file *pfile);
+int        led_close(struct inode *pinode, struct file *pfile);
+ssize_t    led_read(struct file *pfile, char __user *buffer, size_t length, loff_t *offset);
+ssize_t    led_write(struct file *pfile, const char __user *buffer, size_t length, loff_t *offset);
+
+static int __init  led_init(void);
 static void __exit led_exit(void);
 
 struct file_operations my_fops =
@@ -75,11 +82,15 @@ static int led_probe(struct platform_device *pdev)
 {
   struct resource *r_mem;
   int rc = 0;
+
+  /* get resources */
   r_mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
   if (!r_mem) {
     printk(KERN_ALERT "Failed to get resource\n");
     return -ENODEV;
   }
+
+  /* allocate memory for led_info structure */
   lp = (struct led_info *) kmalloc(sizeof(struct led_info), GFP_KERNEL);
   if (!lp) {
     printk(KERN_ALERT "Could not allocate led device\n");
@@ -90,6 +101,7 @@ static int led_probe(struct platform_device *pdev)
   lp->mem_end = r_mem->end;
   //printk(KERN_INFO "Start address:%x \t end address:%x", r_mem->start, r_mem->end);
 
+  /* reserver memory in kernel space */
   if (!request_mem_region(lp->mem_start,lp->mem_end - lp->mem_start + 1,	DRIVER_NAME))
   {
     printk(KERN_ALERT "Could not lock memory region at %p\n",(void *)lp->mem_start);
@@ -109,9 +121,11 @@ static int led_probe(struct platform_device *pdev)
 
 error2:
   release_mem_region(lp->mem_start, lp->mem_end - lp->mem_start + 1);
+  kfree(lp);
 error1:
   return rc;
 }
+
 
 static int led_remove(struct platform_device *pdev)
 {
@@ -124,12 +138,12 @@ static int led_remove(struct platform_device *pdev)
 }
 
 
-
 int led_open(struct inode *pinode, struct file *pfile) 
 {
 		//printk(KERN_INFO "Succesfully opened led\n");
 		return 0;
 }
+
 
 int led_close(struct inode *pinode, struct file *pfile) 
 {
@@ -137,13 +151,15 @@ int led_close(struct inode *pinode, struct file *pfile)
 		return 0;
 }
 
+
 ssize_t led_read(struct file *pfile, char __user *buffer, size_t length, loff_t *offset) 
 {
 	int ret;
-	int len = 0;
+	int len     = 0;
 	u32 led_val = 0;
 	int i = 0;
 	char buff[BUFF_SIZE];
+
 	if (endRead){
 		endRead = 0;
 		return 0;
@@ -174,6 +190,7 @@ ssize_t led_read(struct file *pfile, char __user *buffer, size_t length, loff_t 
 	return len;
 }
 
+
 ssize_t led_write(struct file *pfile, const char __user *buffer, size_t length, loff_t *offset) 
 {
 	char buff[BUFF_SIZE];
@@ -201,7 +218,6 @@ ssize_t led_write(struct file *pfile, const char __user *buffer, size_t length, 
 		ret = kstrtol(buff,10,&led_val);
 	}
 
-	
 	if (!ret)
 	{
 		iowrite32((u32)led_val, lp->base_addr);
@@ -214,6 +230,7 @@ ssize_t led_write(struct file *pfile, const char __user *buffer, size_t length, 
 
 	return length;
 }
+
 
 static int __init led_init(void)
 {
@@ -252,7 +269,7 @@ static int __init led_init(void)
 		goto fail_2;
 	}
    printk(KERN_INFO "cdev added\n");
-   printk(KERN_INFO "Hello world\n");
+   printk(KERN_INFO "GPIO driver added to the kernel\n");
 
   return platform_driver_register(&led_driver);
 
