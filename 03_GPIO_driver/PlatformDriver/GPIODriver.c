@@ -23,7 +23,6 @@ MODULE_AUTHOR("bad63r");
 
 
 #define BUFF_SIZE 20
-#define BUFF_SIZE 20
 #define DRIVER_NAME "led"
 
 struct led_info {
